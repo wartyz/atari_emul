@@ -1,5 +1,5 @@
 // https://www.youtube.com/watch?v=pcqKVQ_bK9A&list=PLJ0INvSnPQjPqw4SiiSVMCDAb3dllSs_M&index=1
-// 3:42:04
+// 6:11:45
 #![allow(non_snake_case)]
 
 use main::cpu::*;
@@ -11,11 +11,11 @@ fn main() {
     let mut atari = Atari::new();
 
 
-    //Tests::CPUFlagsTest(&mut atari.mCPU);
+    Tests::CPUFlagsTest(&mut atari.mCPU);
     //let mut debugger = Debugger::DumpCPU(&atari.mCPU);
-    //Tests::ADC_iTest(&mut atari.mCPU);
+    Tests::ADC_iTest(&mut atari.mCPU);
     Tests::AddrTest(&mut atari.mCPU);
-    //Tests::OPTest(&mut atari.mCPU);
+    Tests::OPTest(&mut atari.mCPU);
 
     println!("Done!");
 }
