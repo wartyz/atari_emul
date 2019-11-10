@@ -28,12 +28,12 @@ pub struct OpCode(// Ojo es una tupla
                   OPFunction,
                   Addressing,
                   u16,
-                  u16,
+                  u32,
 );
 
 impl OpCode {
-    pub fn new(OPFunction: OPFunction, Addressing: Addressing, v: u16, cycles: u16) -> OpCode {
-        let mut op = OpCode(
+    pub fn new(OPFunction: OPFunction, Addressing: Addressing, v: u16, cycles: u32) -> OpCode {
+        let op = OpCode(
             OPFunction,
             Addressing,
             v,
@@ -55,7 +55,7 @@ pub struct CPU {
 
     pub EC: u16, // "Exit counter"
 
-    pub _cycles: u16,
+    pub cycles: u32,
 
     pub mMemory: Memory,
 
@@ -86,11 +86,8 @@ impl CPU {
     pub const CARRY_FLAG: flag_t = 0b0000_0001;
 
 
-    //impl CPU {
-
     pub fn new(memory: Memory) -> CPU {
-        let opCodeMap: [OpCode; 256] = [OpCode::new(fn_no_impl, Addressing::None, 0, 0); 256]; //
-        // pba
+        let opCodeMap: [OpCode; 256] = [OpCode::new(fn_no_impl, Addressing::None, 0, 0); 256];
 
         let mut cpu = CPU {
             A: 0,
@@ -98,11 +95,11 @@ impl CPU {
             Y: 0,
             S: 0xFF,
             PC: 0,
-            F: 0,
+            F: CPU::IGNORED_FLAG,
 
             EC: 0,
 
-            _cycles: 0,
+            cycles: 0,
 
             mMemory: memory,
             opCodeMap: opCodeMap,
@@ -112,12 +109,15 @@ impl CPU {
         //Reset(cpu: &mut CPU); //TODO: No hace falta
         cpu
     }
-    pub fn Cycles(&mut self, cycles: u16) {
-        self._cycles += cycles;
+    pub fn CyclesDevuelve(&mut self) -> u32 {
+        self.cycles.clone()
+    }
+    pub fn Cycles(&mut self, cycles: u32) {
+        self.cycles += cycles;
     }
 
     pub fn GetOP(&mut self, opIndex: &u16, adr: &Addressing) -> u8 { // suma mas carry inmediato
-        let ops_clone = (*opIndex).clone(); // Creo clones yo
+        //let ops_clone = (*opIndex).clone(); // Creo clones yo
         let x = (self.X).clone() as u16;
         let y = (self.Y).clone() as u16;
         let a = (self.A).clone();
@@ -165,30 +165,37 @@ impl CPU {
                 self.mMemory.Get(&finalAddr)
             }
             Addressing::IndexedIndirect => {
-                //let x = self.X.clone() as u16;
-                let v1 = self.mMemory.Get(opIndex) as u16;
-                let v2 = v1 + &x;
-                let addr: u16 = self.mMemory.GetW(&v2);
+                let baseAddr: u16 = (self.mMemory.Get(opIndex) as u16 + x) & 0xFF;
+                let loTarget: u16 = self.mMemory.Get(&baseAddr) as u16;
+                let hiTarget: u16 = self.mMemory.Get(&((baseAddr + 1) & 0xFF)) as u16;
+                let addr: u16 = loTarget + (hiTarget << 8);
                 self.mMemory.Get(&addr)
+
+//                let v1 = self.mMemory.Get(opIndex) as u16;
+//                let v2 = v1 + &x;
+//                let addr: u16 = self.mMemory.GetW(&v2);
+//                self.mMemory.Get(&addr)
             }
             Addressing::IndirectIndexed => {
                 let basePointer: u16 = self.mMemory.Get(&opIndex) as u16;
-                let baseAddress: u16 = self.mMemory.GetW(&basePointer); // TODO no lo tengo claro
+                let loTarget: u16 = self.mMemory.Get(&basePointer) as u16;
+                let hiTarget: u16 = self.mMemory.Get(&((&basePointer + 1) as u16 & 0xFF)) as u16;
+                let baseAddress: u16 = loTarget + (hiTarget << 8);
                 let finalAddress = baseAddress + y;
+
                 if (baseAddress >> 8) != (finalAddress >> 8) {
                     self.Cycles(1);
                 }
                 self.mMemory.Get(&finalAddress)
             }
             _ => {
-                println!("Modo de direccionamiento no soportado");
-                0
+                panic!("Modo de direccionamiento no soportado en GetOP");
             }
         }
     }
 
     pub fn SetOP(&mut self, opIndex: &u16, adr: Addressing, val: u8) {
-        let ops_clone = (*opIndex).clone(); // Creo clones yo
+        //let ops_clone = (*opIndex).clone(); // Creo clones yo
         let x = (self.X).clone() as u16;
         let y = (self.Y).clone() as u16;
         //let a = (self.A).clone();
@@ -224,7 +231,7 @@ impl CPU {
             }
             Addressing::AbsoluteY => {
                 let baseAddr: u16 = self.mMemory.GetW(opIndex);
-                let finalAddr = baseAddr + &y;
+                let finalAddr: u16 = baseAddr + &y;
                 if (baseAddr >> 8) != (finalAddr >> 8) {
                     self.Cycles(1);
                 }
@@ -252,7 +259,7 @@ impl CPU {
                 self.mMemory.Set(&finalAddress, val);
             }
             _ => {
-                println!("Modo de direccionamiento no soportado");
+                panic!("Modo de direccionamiento no soportado en SetOP");
             }
         }
     }
@@ -480,7 +487,7 @@ impl CPU {
         self.Y = 0;
         self.S = 0xFF;
         self.PC = 0;
-        self.F = 0;
+        self.F = CPU::IGNORED_FLAG;
     }
 
 
@@ -498,9 +505,10 @@ impl CPU {
 
     pub fn StackPush(&mut self, val: u8) {
         // El stack en el 6502 siempre está en la página 0x100-0x1FF
-        let S_copia_u16 = 0x100u16 + self.S.clone() as u16;
-        self.mMemory.Set(&S_copia_u16, val);
-        self.S = &self.S - 1;
+        let v_u16 = 0x100u16 + self.S.clone() as u16;
+        self.mMemory.Set(&v_u16, val);
+        //self.S = &self.S - 1;
+        self.S = self.S.wrapping_sub(1);
 
         /*	if (S == 0) // wasteful??
         {
@@ -508,22 +516,26 @@ impl CPU {
         }*/
     }
     pub fn StackPull(&mut self) -> u8 {
-        if self.S < 0xFF {
-            let S_copia_u16 = 0x100u16 + self.S.clone() as u16;
-            let val = self.mMemory.Get(&S_copia_u16);
-            self.S = &self.S + 1;
-            val
-        } else {
-            panic!("Stack vacio!");
-        }
+        //if self.S < 0xFF {
+        //self.S = &self.S + 1;
+        self.S = self.S.wrapping_add(1);
+        let v_u16 = 0x100u16 + self.S.clone() as u16;
+        let val = self.mMemory.Get(&v_u16);
+
+        val
+        /* } else {
+                 panic!("Stack vacio!");
+             }*/
     }
+
     pub fn EntryPoint(&mut self, startAddr: u16, endAddr: u16) {
         self.PC = startAddr;
         self.EC = endAddr;
     }
+
     pub fn Execute(&mut self) {
-        println!("En Execute -------------"); // -----------------------------------
         let code: usize = self.mMemory.Get(&self.PC) as usize;
+
         let opCode = self.opCodeMap[code];
         if opCode.2 > 0 { // si número de bytes de la instrucción > 0
 
@@ -532,15 +544,17 @@ impl CPU {
             let opIndex = &self.PC + 1;
 
             // PC already points to next instruction
+            //println!("En Execute1 PC={:#4X} EC={:#4X} opCode.2={:#X}", self.PC, self.EC, opCode.2);
             self.PC += opCode.2;
+            //println!("En Execute2 PC={:#4X} EC={:#4X} opCode.2={:#X}", self.PC, self.EC, opCode.2);
             func(self, &opIndex, adr); // Ejecutar instrucción
-
+            //println!("En Execute3 PC={:#4X} EC={:#4X} opCode.2={:#X}", self.PC, self.EC, opCode.2);
             if self.PC == (opIndex - 1) {
                 // jump to self: trap
-                //throw std::runtime_error("Trap!");
+                panic!("Trap!");
             }
             if self.PC == self.EC { // Llegó al final
-                panic!("¡Final incorrecto!");
+                panic!("¡Alcanzado Final!");
             }
             self.Cycles(opCode.3); // aumenta valor de cycles
         } else {
@@ -551,7 +565,7 @@ impl CPU {
 /***********************************************************/
 /************* Funciones llamadas por puntero **************/
 /***********************************************************/
-pub fn fn_no_impl(cpu: &mut CPU, valor: &u16, Addressing: Addressing) {}
+pub fn fn_no_impl(_cpu: &mut CPU, _valor: &u16, _Addressing: Addressing) {}
 
 // ----------------------------------------------------------------------
 // ADC Add Memory to Accumulator with Carry
@@ -560,11 +574,12 @@ pub fn fn_no_impl(cpu: &mut CPU, valor: &u16, Addressing: Addressing) {}
 // ----------------------------------------------------------------------
 pub fn ADC(cpu: &mut CPU, op: u8) { // suma
     if cpu.IsSetFlag(CPU::DECIMAL_FLAG) {
+        println!("En ADC");
         let lhr = (cpu.A & 15) + (cpu.A >> 4) * 10;
         let rhr = (op & 15) + (op >> 4) * 10;
         let mut res = lhr + rhr;
         cpu.SetFlag2(CPU::OVERFLOW_FLAG, res > 99);
-        res %= 100; // ???
+        res %= 100;
         cpu.A = res;
         let v1: bool = cpu.IsNegative(&res);
         cpu.SetFlag2(CPU::NEGATIVE_FLAG, v1);
@@ -607,7 +622,7 @@ pub fn opADC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 //                                  + + - - - -
 // ----------------------------------------------------------------------
 pub fn AND(cpu: &mut CPU, op: u8) {
-    let mut a = cpu.A.clone() & op; // operación AND
+    let a = cpu.A.clone() & op; // operación AND
 
     let v1: bool = cpu.IsNegative(&a);
     cpu.SetFlag2(CPU::NEGATIVE_FLAG, v1);
@@ -652,20 +667,31 @@ pub fn opASL(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // ----------------------------------------------------------------------
 pub fn Branch(cpu: &mut CPU, opIndex: &u16, condition: bool) {
     if condition {
-        let salto = cpu.mMemory.Get(&opIndex) as i16;
-        let pci = (cpu.PC).clone() as i16;
-        let pc = (pci + salto) as u16;
+        let salto = cpu.mMemory.Get(&opIndex) as i8;
+        //println!("salto = {:2X}, PC = {:4X}", salto, cpu.PC);
+//let pci = (cpu.PC).clone() as i16;
+//let pc = (pci + salto) as u16;
+        let pc = suma_u16_i8(cpu, cpu.PC, salto);
         cpu.PC = pc; // Creo que sbyte_t es byte con signo
     }
 }
 
+pub fn suma_u16_i8(cpu: &mut CPU, sin_signo: u16, con_signo: i8) -> u16 {
+    let v = con_signo as u8;
+    if cpu.IsNegative(&v) {
+//sin_signo - con_signo.wrapping_abs() as u16
+        sin_signo.wrapping_sub(con_signo.wrapping_abs() as u16)
+    } else {
+        sin_signo + (v as u16)
+    }
+}
 // ----------------------------------------------------------------------
 // BCC Branch on Carry Clear
 // salto si C = 0                  N Z C I D V
 //                                 - - - - - -
 // ----------------------------------------------------------------------
 
-pub fn opBCC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opBCC(cpu: &mut CPU, opIndex: &u16, _adr: Addressing) {
     let condicion: bool = cpu.IsSetFlag(CPU::CARRY_FLAG);
     Branch(cpu, opIndex, !condicion);
 }
@@ -675,7 +701,7 @@ pub fn opBCC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // salto si C = 1                  N Z C I D V
 //                                 - - - - - -
 // ----------------------------------------------------------------------
-pub fn opBCS(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opBCS(cpu: &mut CPU, opIndex: &u16, _adr: Addressing) {
     let condicion: bool = cpu.IsSetFlag(CPU::CARRY_FLAG);
     Branch(cpu, opIndex, condicion);
 }
@@ -685,7 +711,7 @@ pub fn opBCS(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // salto si Z = 1                  N Z C I D V
 //                                 - - - - - -
 // ----------------------------------------------------------------------
-pub fn opBEQ(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opBEQ(cpu: &mut CPU, opIndex: &u16, _adr: Addressing) {
     let condicion: bool = cpu.IsSetFlag(CPU::ZERO_FLAG);
     Branch(cpu, opIndex, condicion);
 }
@@ -703,7 +729,7 @@ pub fn opBIT(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
     let v1: bool = cpu.IsNegative(&op);
     cpu.SetFlag2(CPU::NEGATIVE_FLAG, v1);
     cpu.SetFlag2(CPU::OVERFLOW_FLAG, (op & 0b01000000) != 0);
-    let res: u8 = (cpu.A & op);
+    let res: u8 = &cpu.A & op;
     let v2: bool = cpu.IsZero(&res);
     cpu.SetFlag2(CPU::ZERO_FLAG, v2);
 }
@@ -713,7 +739,7 @@ pub fn opBIT(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // salto si N = 1                  N Z C I D V
 //                                 - - - - - -
 // ----------------------------------------------------------------------
-pub fn opBMI(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opBMI(cpu: &mut CPU, opIndex: &u16, _adr: Addressing) {
     let condicion: bool = cpu.IsSetFlag(CPU::NEGATIVE_FLAG);
     Branch(cpu, opIndex, condicion);
 }
@@ -723,7 +749,7 @@ pub fn opBMI(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // salto si Z = 0                  N Z C I D V
 //                                 - - - - - -
 // ----------------------------------------------------------------------
-pub fn opBNE(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opBNE(cpu: &mut CPU, opIndex: &u16, _adr: Addressing) {
     let condicion: bool = cpu.IsSetFlag(CPU::ZERO_FLAG);
     Branch(cpu, opIndex, !condicion);
 }
@@ -733,7 +759,7 @@ pub fn opBNE(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // salto si N = 0                  N Z C I D V
 //                                 - - - - - -
 // ----------------------------------------------------------------------
-pub fn opBPL(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opBPL(cpu: &mut CPU, opIndex: &u16, _adr: Addressing) {
     let condicion: bool = cpu.IsSetFlag(CPU::NEGATIVE_FLAG);
     Branch(cpu, opIndex, !condicion);
 }
@@ -743,8 +769,9 @@ pub fn opBPL(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // interrupt,                       N Z C I D V
 // push PC+2, push SR               - - - 1 - -
 // ----------------------------------------------------------------------
-pub fn opBRK(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
-    cpu.PC += 1;
+pub fn opBRK(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
+//cpu.PC += 1;
+    cpu.PC = cpu.PC.wrapping_add(1);  // No overflow
     let v1 = (&cpu.PC >> 8) as u8;
     cpu.StackPush(v1);
     cpu.StackPush((&cpu.PC & 0xFF) as u8);
@@ -760,7 +787,7 @@ pub fn opBRK(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // salto si V = 0                  N Z C I D V
 //                                 - - - - - -
 // ----------------------------------------------------------------------
-pub fn opBVC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opBVC(cpu: &mut CPU, opIndex: &u16, _adr: Addressing) {
     let condicion: bool = cpu.IsSetFlag(CPU::OVERFLOW_FLAG);
     Branch(cpu, opIndex, !condicion);
 }
@@ -770,7 +797,7 @@ pub fn opBVC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // salto si V = 1                  N Z C I D V
 //                                 - - - - - -
 // ----------------------------------------------------------------------
-pub fn opBVS(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opBVS(cpu: &mut CPU, opIndex: &u16, _adr: Addressing) {
     let condicion: bool = cpu.IsSetFlag(CPU::OVERFLOW_FLAG);
     Branch(cpu, opIndex, condicion);
 }
@@ -780,7 +807,7 @@ pub fn opBVS(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 //                                      - - 0 - - -
 // ----------------------------------------------------------------------
 
-pub fn opCLC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opCLC(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.ClearFlag(CPU::CARRY_FLAG);
 }
 
@@ -789,7 +816,7 @@ pub fn opCLC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 //     0 -> D                           N Z C I D V
 //                                      - - - - 0 -
 // ----------------------------------------------------------------------
-pub fn opCLD(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opCLD(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.ClearFlag(CPU::DECIMAL_FLAG);
 }
 
@@ -798,7 +825,7 @@ pub fn opCLD(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 //     0 -> I                           N Z C I D V
 //                                      - - - 0 - -
 // ----------------------------------------------------------------------
-pub fn opCLI(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opCLI(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.ClearFlag(CPU::INTERRUPT_FLAG);
 }
 
@@ -807,7 +834,7 @@ pub fn opCLI(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 //     0 -> V                           N Z C I D V
 //                                      - - - - - 0
 // ----------------------------------------------------------------------
-pub fn opCLV(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opCLV(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.ClearFlag(CPU::OVERFLOW_FLAG);
 }
 
@@ -815,9 +842,10 @@ pub fn opCLV(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // Función auxiliar para comparaciones
 // ----------------------------------------------------------------------
 pub fn Compare(cpu: &mut CPU, r: &u8, op: u8) {
-    let r_copia = r.clone();
-    let res = ((r_copia - op) & 0xFF) as u8; // TODO: no entiendo esta conversion
-
+    let r_copia = r.clone() as u16;
+//let res = ((r_copia - op) & 0xFF) as u8; // TODO: no entiendo esta conversion
+    let res = (r_copia.wrapping_sub(op as u16) & 0xFF) as u8; // TODO: no entiendo esta conversion
+    //println!("En Compare, res= {:#2X}", res);
     let v1: bool = cpu.IsZero(&res);
     cpu.SetFlag2(CPU::ZERO_FLAG, v1);
 
@@ -880,8 +908,10 @@ pub fn opDEC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // X - 1 -> X                       N Z C I D V
 //                                  + + - - - -
 // ----------------------------------------------------------------------
-pub fn opDEX(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
-    cpu.X = &cpu.X - 1;
+pub fn opDEX(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
+//cpu.X = &cpu.X - 1;
+    //println!("En opDEX");
+    cpu.X = cpu.X.wrapping_sub(1);  // No overflow
     let copia_X = cpu.X.clone();
     let v1: bool = cpu.IsZero(&copia_X);
     cpu.SetFlag2(CPU::ZERO_FLAG, v1);
@@ -895,8 +925,9 @@ pub fn opDEX(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // Y - 1 -> Y                       N Z C I D V
 //                                  + + - - - -
 // ----------------------------------------------------------------------
-pub fn opDEY(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
-    cpu.Y = &cpu.Y - 1;
+pub fn opDEY(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
+//cpu.Y = &cpu.Y - 1;
+    cpu.Y = cpu.Y.wrapping_sub(1);  // No overflow
     let copia_Y = cpu.Y.clone();
     let v1: bool = cpu.IsZero(&copia_Y);
     cpu.SetFlag2(CPU::ZERO_FLAG, v1);
@@ -933,7 +964,7 @@ pub fn opEOR(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // ----------------------------------------------------------------------
 pub fn opINC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
     let res = cpu.GetOP(opIndex, &adr) + 1;
-    //res++;
+//res++;
     let v1: bool = cpu.IsZero(&res);
     cpu.SetFlag2(CPU::ZERO_FLAG, v1);
 
@@ -947,8 +978,9 @@ pub fn opINC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // X + 1 -> X                       N Z C I D V
 //                                  + + - - - -
 // ----------------------------------------------------------------------
-pub fn opINX(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
-    cpu.X = &cpu.X + 1;
+pub fn opINX(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
+//cpu.X = &cpu.X + 1;
+    cpu.X = cpu.X.wrapping_add(1);  // No overflow
     let copia_X = cpu.X.clone();
 
     let v1: bool = cpu.IsZero(&copia_X);
@@ -963,8 +995,9 @@ pub fn opINX(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 //  Y + 1 -> Y                       N Z C I D V
 //                                   + + - - - -
 // ----------------------------------------------------------------------
-pub fn opINY(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
-    cpu.Y = &cpu.Y + 1;
+pub fn opINY(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
+//cpu.Y = &cpu.Y + 1;
+    cpu.Y = cpu.Y.wrapping_add(1);  // No overflow
     let copia_Y = cpu.Y.clone();
 
     let v1: bool = cpu.IsZero(&copia_Y);
@@ -983,7 +1016,8 @@ pub fn opINY(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 pub fn opJMP(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
     match adr {
         Addressing::Absolute => {
-            cpu.PC = cpu.mMemory.GetW(opIndex);
+            let targetPC = cpu.mMemory.GetW(opIndex);
+            cpu.PC = targetPC;
         }
         Addressing::Indirect => {
             let addr = cpu.mMemory.GetW(opIndex);
@@ -999,7 +1033,7 @@ pub fn opJMP(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // (PC+1) -> PCL                    - - - - - -
 // (PC+2) -> PCH
 // ----------------------------------------------------------------------
-pub fn opJSR(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opJSR(cpu: &mut CPU, opIndex: &u16, _adr: Addressing) {
     let retAddress = &cpu.PC - 1; // next instruction - 1
     cpu.StackPush((retAddress >> 8) as u8);
     cpu.StackPush((retAddress & 0xFF) as u8);
@@ -1079,7 +1113,7 @@ pub fn opLSR(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // ---                              N Z C I D V
 //                                  - - - - - -
 // ----------------------------------------------------------------------
-pub fn opNOP(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {}
+pub fn opNOP(_cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {}
 
 // ----------------------------------------------------------------------
 // ORA OR de memoria con acumulador
@@ -1107,7 +1141,7 @@ pub fn opORA(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // push A                           N Z C I D V
 //                                  - - - - - -
 // ----------------------------------------------------------------------
-pub fn opPHA(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opPHA(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     let A_copia = cpu.A.clone();
     cpu.StackPush(A_copia);
 }
@@ -1117,8 +1151,8 @@ pub fn opPHA(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // push SR                          N Z C I D V
 //                                  - - - - - -
 // ----------------------------------------------------------------------
-pub fn opPHP(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
-    let F_copia = cpu.F.clone();
+pub fn opPHP(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
+    let F_copia = cpu.F.clone() | CPU::BREAK_FLAG;
     cpu.StackPush(F_copia);
 }
 
@@ -1127,8 +1161,15 @@ pub fn opPHP(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // pull A                           N Z C I D V
 //                                  + + - - - -
 // ----------------------------------------------------------------------
-pub fn opPLA(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opPLA(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.A = cpu.StackPull();
+    let A_copia = cpu.A.clone();
+
+    let v1: bool = cpu.IsNegative(&A_copia);
+    cpu.SetFlag2(CPU::NEGATIVE_FLAG, v1);
+
+    let v2: bool = cpu.IsZero(&A_copia);
+    cpu.SetFlag2(CPU::ZERO_FLAG, v2)
 }
 
 // ----------------------------------------------------------------------
@@ -1136,8 +1177,10 @@ pub fn opPLA(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // pull SR                          N Z C I D V
 //                                  del stack
 // ----------------------------------------------------------------------
-pub fn opPLP(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opPLP(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.F = cpu.StackPull();
+    cpu.ClearFlag(CPU::BREAK_FLAG);
+    cpu.SetFlag1(CPU::IGNORED_FLAG);
 }
 
 // ----------------------------------------------------------------------
@@ -1150,7 +1193,7 @@ pub fn ROL(cpu: &mut CPU, op: u8) -> u8 {
 
     cpu.SetFlag2(CPU::CARRY_FLAG, (&op & 0x80) != 0);
     let mut op_copia = op << 1;
-    //op_copia <<= 1;
+//op_copia <<= 1;
     if hadCarry {
         op_copia = &op_copia + 1;
     }
@@ -1177,7 +1220,7 @@ pub fn ROR(cpu: &mut CPU, op: u8) -> u8 {
     let hadCarry = cpu.IsSetFlag(CPU::CARRY_FLAG);
     cpu.SetFlag2(CPU::CARRY_FLAG, (&op & 0x01) != 0);
     let mut op_copia = op >> 1;
-    //op >> = 1;
+//op >> = 1;
     if hadCarry {
         op_copia = &op_copia + 0x80;
     }
@@ -1200,10 +1243,10 @@ pub fn opROR(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // pull SR, pull PC                 N Z C I D V
 //                                   del stack
 // ----------------------------------------------------------------------
-pub fn opRTI(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opRTI(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.F = cpu.StackPull();
     let mut retAddress = cpu.StackPull() as u16;
-    retAddress += ((cpu.StackPull() as u16) << 8);
+    retAddress += (cpu.StackPull() as u16) << 8;
     cpu.PC = retAddress;
 }
 
@@ -1212,7 +1255,7 @@ pub fn opRTI(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // pull PC, PC+1 -> PC              N Z C I D V
 //                                  - - - - - -
 // ----------------------------------------------------------------------
-pub fn opRTS(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opRTS(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     let mut retAddress = cpu.StackPull() as u16;
     retAddress = retAddress + ((cpu.StackPull() as u16) << 8);
     let retAddress1 = retAddress + 1; // we pushed next instruction - 1
@@ -1229,9 +1272,12 @@ pub fn SBC(cpu: &mut CPU, op: u8) { // suma
         let lhr = (cpu.A & 15) + (cpu.A >> 4) * 10;
         let rhr = (op & 15) + (op >> 4) * 10;
         let mut res = lhr - rhr;
-        cpu.SetFlag2(CPU::OVERFLOW_FLAG, res < 0);
+
+        cpu.SetFlag2(CPU::OVERFLOW_FLAG, (res as i8) < 0);  // TODO comparación sin sentido
+
         res %= 100; // ???
         cpu.A = res;
+
         let v1: bool = cpu.IsNegative(&res);
         cpu.SetFlag2(CPU::NEGATIVE_FLAG, v1);
 
@@ -1240,23 +1286,28 @@ pub fn SBC(cpu: &mut CPU, op: u8) { // suma
     } else {
         let mut result: i16 = cpu.A.clone() as i16;
 
+        let mut carry: i8 = 0;
+        if cpu.IsSetFlag(CPU::CARRY_FLAG) {
+            carry = 1;
+        }
 
-        if cpu.IsSetFlag(CPU::CARRY_FLAG) && op > cpu.A {
-            result += 0x100;
+        if carry == 1 && (result as i8) < (op as i8) {
+            cpu.SetFlag1(CPU::CARRY_FLAG);
+        } else {
             cpu.ClearFlag(CPU::CARRY_FLAG);
         }
-        result -= op.clone() as i16;
 
+        result = result - op as i16 - (1 - carry) as i16;
+        let sresult: i8 = result as i8 - &(op as i8) - (1 - carry);
 
-        cpu.SetFlag2(CPU::OVERFLOW_FLAG, result < -127 || result > 127); // validate this
-        let res = (&result & 0xFF) as u8;
+        cpu.SetFlag2(CPU::OVERFLOW_FLAG, sresult < -128 || sresult > 127);
+        let res: u8 = (&result & 0xFF) as u8;
 
         let v: bool = cpu.IsNegative(&res);
         cpu.SetFlag2(CPU::NEGATIVE_FLAG, v);
 
         let v: bool = cpu.IsZero(&res);
         cpu.SetFlag2(CPU::ZERO_FLAG, v);
-
 
         cpu.A = res;
     }
@@ -1272,7 +1323,7 @@ pub fn opSBC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // 1 -> C                           N Z C I D V
 //                                  - - 1 - - -
 // ----------------------------------------------------------------------
-pub fn opSEC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opSEC(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.SetFlag1(CPU::CARRY_FLAG);
 }
 
@@ -1281,7 +1332,7 @@ pub fn opSEC(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // 1 -> D                           N Z C I D V
 //                                  - - - - 1 -
 // ----------------------------------------------------------------------
-pub fn opSED(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opSED(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.SetFlag1(CPU::DECIMAL_FLAG);
 }
 
@@ -1290,7 +1341,7 @@ pub fn opSED(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // 1 -> I                           N Z C I D V
 //                                  - - - 1 - -
 // ----------------------------------------------------------------------
-pub fn opSEI(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opSEI(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.SetFlag1(CPU::INTERRUPT_FLAG);
 }
 
@@ -1329,7 +1380,7 @@ pub fn opSTY(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // A -> X                           N Z C I D V
 //                                  + + - - - -
 // ----------------------------------------------------------------------
-pub fn opTAX(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opTAX(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.X = cpu.A.clone();
     let X_copia = cpu.X.clone();
 
@@ -1337,7 +1388,7 @@ pub fn opTAX(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
     cpu.SetFlag2(CPU::NEGATIVE_FLAG, v1);
 
     let v2: bool = cpu.IsZero(&X_copia);
-    cpu.SetFlag2(CPU::NEGATIVE_FLAG, v2);
+    cpu.SetFlag2(CPU::ZERO_FLAG, v2);
 }
 
 // ----------------------------------------------------------------------
@@ -1345,7 +1396,7 @@ pub fn opTAX(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // A -> Y                           N Z C I D V
 //                                  + + - - - -
 // ----------------------------------------------------------------------
-pub fn opTAY(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opTAY(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.Y = cpu.A.clone();
     let Y_copia = cpu.Y.clone();
 
@@ -1353,7 +1404,7 @@ pub fn opTAY(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
     cpu.SetFlag2(CPU::NEGATIVE_FLAG, v1);
 
     let v2: bool = cpu.IsZero(&Y_copia);
-    cpu.SetFlag2(CPU::NEGATIVE_FLAG, v2);
+    cpu.SetFlag2(CPU::ZERO_FLAG, v2);
 }
 
 // ----------------------------------------------------------------------
@@ -1361,7 +1412,7 @@ pub fn opTAY(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // SP -> X                          N Z C I D V
 //                                  + + - - - -
 // ----------------------------------------------------------------------
-pub fn opTSX(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opTSX(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.X = cpu.S.clone();
     let X_copia = cpu.X.clone();
 
@@ -1369,7 +1420,7 @@ pub fn opTSX(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
     cpu.SetFlag2(CPU::NEGATIVE_FLAG, v1);
 
     let v2: bool = cpu.IsZero(&X_copia);
-    cpu.SetFlag2(CPU::NEGATIVE_FLAG, v2);
+    cpu.SetFlag2(CPU::ZERO_FLAG, v2);
 }
 
 // ----------------------------------------------------------------------
@@ -1377,7 +1428,7 @@ pub fn opTSX(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // X -> A                           N Z C I D V
 //                                  + + - - - -
 // ----------------------------------------------------------------------
-pub fn opTXA(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opTXA(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.A = cpu.X.clone();
     let A_copia = cpu.A.clone();
 
@@ -1385,7 +1436,7 @@ pub fn opTXA(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
     cpu.SetFlag2(CPU::NEGATIVE_FLAG, v1);
 
     let v2: bool = cpu.IsZero(&A_copia);
-    cpu.SetFlag2(CPU::NEGATIVE_FLAG, v2);
+    cpu.SetFlag2(CPU::ZERO_FLAG, v2);
 }
 
 // ----------------------------------------------------------------------
@@ -1393,7 +1444,7 @@ pub fn opTXA(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // X -> SP                          N Z C I D V
 //                                  - - - - - -
 // ----------------------------------------------------------------------
-pub fn opTXS(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opTXS(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.S = cpu.X.clone();
 }
 
@@ -1402,7 +1453,7 @@ pub fn opTXS(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
 // Y -> A                           N Z C I D V
 //                                  + + - - - -
 // ----------------------------------------------------------------------
-pub fn opTYA(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
+pub fn opTYA(cpu: &mut CPU, _opIndex: &u16, _adr: Addressing) {
     cpu.A = cpu.Y.clone();
     let A_copia = cpu.A.clone();
 
@@ -1410,5 +1461,5 @@ pub fn opTYA(cpu: &mut CPU, opIndex: &u16, adr: Addressing) {
     cpu.SetFlag2(CPU::NEGATIVE_FLAG, v1);
 
     let v2: bool = cpu.IsZero(&A_copia);
-    cpu.SetFlag2(CPU::NEGATIVE_FLAG, v2);
+    cpu.SetFlag2(CPU::ZERO_FLAG, v2);
 }

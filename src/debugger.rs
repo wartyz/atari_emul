@@ -10,7 +10,7 @@ impl Debugger {
         print!("A = {:02X}, ({:03}) ", cpu.A, cpu.A);
         print!("X = {:02X}, ({:03}) ", cpu.X, cpu.X);
         print!("Y = {:02X}, ({:03}) ", cpu.Y, cpu.Y);
-        print!("PC = {:02X}, ({:03}) ", cpu.PC, cpu.PC);
+        print!("PC = {:04X}, ({:05}) ", cpu.PC, cpu.PC);
         print!("S = {:02X}, ({:03}) ", cpu.S, cpu.S);
 
         print!("Flags = ");

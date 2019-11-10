@@ -141,4 +141,22 @@ impl Tests {
         println!("14");
         Tests::Assert(cpu.GetOP(&0u16, &Addressing::IndexedIndirect) == 9);
     }
+
+    pub fn FuntionalTests(cpu: &mut CPU) {
+        cpu.mMemory.Load("6502ft.bin".to_string(), 0);
+        cpu.EntryPoint(0x3411, 0x3469);
+        loop {
+            //Debugger::DumpCPU(&mut atari.mCPU);
+            cpu.Execute();
+        }
+    }
+
+    pub fn AllSuiteA(cpu: &mut CPU) {
+        cpu.mMemory.Load("AllSuiteA.bin".to_string(), 0xC000);
+        cpu.EntryPoint(0xC000, 0x45C0);
+        loop {
+            //Debugger::DumpCPU(&mut atari.mCPU);
+            cpu.Execute();
+        }
+    }
 }
